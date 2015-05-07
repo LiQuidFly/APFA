@@ -5,6 +5,9 @@
 #include<unordered_map>
 #include<unordered_set>
 #include<memory>
+#include<iostream>
+
+#include<SDL2/SDL.h>
 
 typedef char byte;
 typedef unsigned char ubyte;
@@ -25,6 +28,15 @@ bool operator<(const range&l,const range&r)
     return l.e<r.s;
 }
 
+std::set<range>::size_type count(std::set<range>& s,range r)
+{
+    auto pair=s.equal_range(r);
+    std::set<range>::size_type sz;
+    
+    for(sz=0;pair.first!=pair.second;++pair.first,++sz);
+    return sz;
+}
+
 class Map
 {
 public:
@@ -36,6 +48,10 @@ public:
     ~Map()
     {
         delete[]map;
+    }
+    void clear()
+    {
+        memset(map,0,sizeof(block)*width*height);
     }
     void random(double percent)
     {
@@ -51,7 +67,7 @@ public:
         areax.clear();
         areay.clear();
 
-        uint idx=0,idy=0;
+        uint /*idx=0,*/idy=0;
         std::set<range>prev_range;
         std::set<range>next_range;
         range r;
@@ -66,10 +82,9 @@ public:
                 next_range.insert(r);
                 r.s=r.e+1;
             }
-
             for(auto in=next_range.begin();in!=next_range.end();in++)
             {
-                auto cp=prev_range.count(*in);
+                auto cp=count(prev_range,*in);
                 std::unordered_map<uint,area>::iterator i;
                 if(cp>1||cp==0)
                 {
@@ -81,7 +96,7 @@ public:
                 else
                 {
                     auto ip=prev_range.find(*in);
-                    auto cn=next_range.count(*ip);
+                    auto cn=count(next_range,*ip);
                     assert(cn!=0);
                     if(cn>1)
                     {
@@ -105,9 +120,17 @@ public:
             next_range.clear();
         }
     }
-    bool get(ushort x,ushort y)
+    bool get(ushort x,ushort y)const
     {
         return at(x,y).blocked;
+    }
+    uint getX(ushort x,ushort y)const
+    {
+        return at(x,y).idx;
+    }
+    uint getY(ushort x,ushort y)const
+    {
+        return at(x,y).idy;
     }
     bool set(ushort x,ushort y,bool blocked)
     {
@@ -115,14 +138,14 @@ public:
         at(x,y).blocked=blocked;
         return ori;
     }
-private:
     const ushort width,height;
+private:
     struct block
     {
         uint idx,idy;
         bool blocked;
     }*const map;
-    block& at(ushort x,ushort y)
+    block& at(ushort x,ushort y)const
     {
         assert(x<width&&y<height);
         return map[x*height+y];
@@ -135,6 +158,8 @@ private:
         uint len;
         ushort sm,em;
         bool direct;
+
+        uint prev;
 
         std::unordered_set<uint>snear,enear;
         
@@ -161,7 +186,123 @@ private:
 
 };
 
+struct rgba
+{
+    rgba(uint color)
+    {
+        r=color&0xff;
+        g=(color>>=8)&0xff;
+        b=(color>>=8)&0xff;
+        a=(color>>=8)&0xff;
+    }
+    ubyte r,g,b,a;
+};
+class Rainbow
+{
+public:
+    Rainbow(uint seed=0):re(seed)
+    {
+        colors.push_back(0);
+    }
+    rgba get(ushort id)
+    {
+        while(id>=colors.size())colors.push_back(dis(re));
+        return rgba(colors[id]);
+    }
+private:
+    std::vector<uint>colors;
+    std::uniform_int_distribution<uint> dis;
+    std::default_random_engine re;
+};
+
+class Surface
+{
+public:
+    Surface(const Map& map,ubyte size,uint seed=0)
+        :map(&map),size(size),bow(seed){}
+    void draw(SDL_Renderer* r)
+    {
+        SDL_Rect rect;
+        rect.w=rect.h=size;
+        SDL_RenderClear(r);
+        for(ushort x=0;x<map->width;x++)
+        {
+            rect.x=x*size;
+            for(ushort y=0;y<map->height;y++)
+            {
+                rect.y=y*size;
+                auto color=bow.get(map->getY(x,y));
+                SDL_SetRenderDrawColor(r,color.r,color.g,color.b,color.a);
+                SDL_RenderFillRect(r,&rect);
+            }
+        }
+        SDL_RenderPresent(r);
+}
+private:
+    const Map* map;
+    ubyte size;
+    Rainbow bow;
+};
+
 int main()
 {
+    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS) != 0){
+        std::cout << "SDL_Init Error: " << SDL_GetError() << std::endl;
+        return 1;
+    }
+    SDL_Window *win = SDL_CreateWindow("Another Path Finding Algorithm", 100, 100, 640, 480, SDL_WINDOW_SHOWN);
+    if (win == nullptr){
+        std::cout << "SDL_CreateWindow Error: " << SDL_GetError() << std::endl;
+        SDL_Quit();
+        return 2;
+    }
+    SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (ren == nullptr){
+        SDL_DestroyWindow(win);
+        std::cout << "SDL_CreateRenderer Error: " << SDL_GetError() << std::endl;
+        SDL_Quit();
+        return 3;
+    }
+
+    const double percent=0.3;
+    Map map(40,30);
+    map.random(percent);
+    map.scan();
+    Surface surf(map,16,2);
+    surf.draw(ren);
+
+    SDL_Event e;
+    while(SDL_WaitEvent(&e))
+    {
+        switch(e.type)
+        {
+        case SDL_QUIT:
+            goto out;
+            break;
+        case SDL_KEYUP:
+            switch(e.key.keysym.sym)
+            {
+            case SDLK_SPACE:
+                map.clear();
+                map.random(percent);
+                map.scan();
+                surf.draw(ren);
+                break;
+            case SDLK_ESCAPE:
+                SDL_Event ev;
+                ev.type=SDL_QUIT;
+                SDL_PushEvent(&ev);
+                break;
+            }
+            break;
+        case SDL_MOUSEBUTTONUP:
+            break;
+        }
+    }
+out:
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+
     return 0;
 }
