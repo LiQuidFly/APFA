@@ -8,6 +8,7 @@
 #include<iostream>
 
 #include<SDL2/SDL.h>
+#include<SDL2/SDL_ttf.h>
 
 typedef char byte;
 typedef unsigned char ubyte;
@@ -67,7 +68,7 @@ public:
         areax.clear();
         areay.clear();
 
-        uint /*idx=0,*/idy=0;
+        uint idx=0,idy=0;
         std::set<range>prev_range;
         std::set<range>next_range;
         range r;
@@ -113,12 +114,63 @@ public:
                 i->second.e=y;
                 i->second.es=in->s;
                 i->second.ee=in->e;
-                for(ushort x=in->s;x<=in->e;x++)at(x,y).idy=i->first;
+                for(ushort x=in->s;x<=in->e;++x)at(x,y).idy=i->first;
             }
 
             std::swap(prev_range,next_range);
             next_range.clear();
         }
+
+        prev_range.clear();
+
+        for(ushort x=0;x<width;++x)
+        {
+            for(r.s=0;r.s<height;++r.s)
+            {
+                if(get(x,r.s))continue;
+                for(r.e=r.s+1;r.e<height&&!get(x,r.e);++r.e);
+                --r.e;
+                next_range.insert(r);
+                r.s=r.e+1;
+            }
+            for(auto in=next_range.begin();in!=next_range.end();in++)
+            {
+                auto cp=count(prev_range,*in);
+                std::unordered_map<uint,area>::iterator i;
+                if(cp>1||cp==0)
+                {
+                    i=areax.insert(std::make_pair(++idx,area())).first;
+                    i->second.s=x;
+                    i->second.ss=in->s;
+                    i->second.se=in->e;
+                }
+                else
+                {
+                    auto ip=prev_range.find(*in);
+                    auto cn=count(next_range,*ip);
+                    assert(cn!=0);
+                    if(cn>1)
+                    {
+                        i=areax.insert(std::make_pair(++idx,area())).first;
+                        i->second.s=x;
+                        i->second.ss=in->s;
+                        i->second.se=in->e;
+                    }
+                    else
+                    {
+                        i=areax.find(at(x-1,ip->s).idx);
+                    }
+                }
+                i->second.e=x;
+                i->second.es=in->s;
+                i->second.ee=in->e;
+                for(ushort y=in->s;y<=in->e;++y)at(x,y).idx=i->first;
+            }
+
+            std::swap(prev_range,next_range);
+            next_range.clear();
+        }
+
     }
     bool get(ushort x,ushort y)const
     {
@@ -220,7 +272,7 @@ class Surface
 public:
     Surface(const Map& map,ubyte size,uint seed=0)
         :map(&map),size(size),bow(seed){}
-    void draw(SDL_Renderer* r)
+    void draw(SDL_Renderer* r,bool xy=true)
     {
         SDL_Rect rect;
         rect.w=rect.h=size;
@@ -231,7 +283,9 @@ public:
             for(ushort y=0;y<map->height;y++)
             {
                 rect.y=y*size;
-                auto color=bow.get(map->getY(x,y));
+                rgba color(0);
+                if(xy)color=bow.get(map->getX(x,y));
+                else color=bow.get(map->getY(x,y));
                 SDL_SetRenderDrawColor(r,color.r,color.g,color.b,color.a);
                 SDL_RenderFillRect(r,&rect);
             }
@@ -246,31 +300,45 @@ private:
 
 int main()
 {
-    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS) != 0){
+    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS) != 0)
+    {
         std::cout << "SDL_Init Error: " << SDL_GetError() << std::endl;
         return 1;
     }
     SDL_Window *win = SDL_CreateWindow("Another Path Finding Algorithm", 100, 100, 640, 480, SDL_WINDOW_SHOWN);
-    if (win == nullptr){
+    if (win == nullptr)
+    {
         std::cout << "SDL_CreateWindow Error: " << SDL_GetError() << std::endl;
         SDL_Quit();
         return 2;
     }
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (ren == nullptr){
+    if (ren == nullptr)
+    {
         SDL_DestroyWindow(win);
         std::cout << "SDL_CreateRenderer Error: " << SDL_GetError() << std::endl;
         SDL_Quit();
         return 3;
     }
 
-    const double percent=0.3;
+    if(TTF_Init()==-1)
+    {
+        std::cout << "TTF_Init Error: " << TTF_GetError() << std::endl;
+        return 4;
+    }
+
+    auto font=TTF_OpenFont("/usr/share/fonts/TTF/UbuntuMono-B.ttf",400);
+
+    const double percent=0.15;
     Map map(40,30);
     map.random(percent);
     map.scan();
     Surface surf(map,16,2);
     surf.draw(ren);
 
+    auto tsurf=TTF_RenderText_Blended(font,"TT",{128,128,128,128});
+
+    bool xy=true;
     SDL_Event e;
     while(SDL_WaitEvent(&e))
     {
@@ -286,7 +354,11 @@ int main()
                 map.clear();
                 map.random(percent);
                 map.scan();
-                surf.draw(ren);
+                surf.draw(ren,xy);
+                break;
+            case SDLK_TAB:
+                xy=!xy;
+                surf.draw(ren,xy);
                 break;
             case SDLK_ESCAPE:
                 SDL_Event ev;
@@ -302,6 +374,8 @@ int main()
 out:
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
+
+    TTF_Quit();
     SDL_Quit();
 
     return 0;
